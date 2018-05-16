@@ -36,12 +36,14 @@ module.exports = function pgpatcher(client, level, opts, callback) {
     var forwardPatch = {};
     var reversePatch = {};
     var currentPatchLevel;
+    var tryLevel;
 
     async.series(
         [
             readPatchDir,
             getCurrentPatch,
             // checkAllPatchFilesExist,
+            calculateTryLevel,
             begin,
             nextPatch,
             writeCurrentLevel,
@@ -81,15 +83,23 @@ module.exports = function pgpatcher(client, level, opts, callback) {
             });
             done();
         });
-        
+
     }
 
     function begin(done) {
+        if (opts.nonTransactionalPatches && opts.nonTransactionalPatches.includes(tryLevel)) {
+            logger('Not running patch level ' + tryLevel + ' in a transaction');
+            return done();
+        }
         logger('Beginning transaction ...');
         client.query("BEGIN", done);
     }
 
     function commit(done) {
+        if (opts.nonTransactionalPatches && opts.nonTransactionalPatches.includes(tryLevel)) {
+            logger('Patch level ' + tryLevel + ' was not executed in a transaction');
+            return done();
+        }
         logger('Commiting transaction ...');
         client.query("COMMIT", done);
     }
@@ -113,18 +123,28 @@ module.exports = function pgpatcher(client, level, opts, callback) {
         });
     }
 
-    function nextPatch(done) {
-        logger('Patching to next level ...');
-
-        var tryLevel;
-        var patch;
+    function calculateTryLevel(done) {
         if ( level > currentPatchLevel ) {
             tryLevel = currentPatchLevel + 1;
-            patch = forwardPatch[tryLevel];
-            logger('Trying forward patch to %s ...', tryLevel);
         }
         else if ( level < currentPatchLevel ) {
             tryLevel = currentPatchLevel - 1;
+        }
+        else {
+            tryLevel = currentPatchLevel;
+        }
+        done();
+    }
+
+    function nextPatch(done) {
+        logger('Patching to next level ...');
+
+        var patch;
+        if ( tryLevel > currentPatchLevel ) {
+            patch = forwardPatch[tryLevel];
+            logger('Trying forward patch to %s ...', tryLevel);
+        }
+        else if ( tryLevel < currentPatchLevel ) {
             patch = reversePatch[tryLevel];
             logger('Trying reverse patch to %s ...', tryLevel);
         }
